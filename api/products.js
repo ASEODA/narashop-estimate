@@ -15,7 +15,7 @@ app.use(express.static('public'));
 const PORT = process.env.PORT || 3000;
 
 // 공공데이터 포털 API 키
-const API_KEY = 'c3841318b681fad81247356e55fe8f4d050ed6b2e07377c70d255d4b0f7fd8ac';
+const API_KEY = process.env.API_KEY || 'c3841318b681fad81247356e55fe8f4d050ed6b2e07377c70d255d4b0f7fd8ac';
 
 // 기본 페이지
 app.get('/', (req, res) => {
