@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>나라장터 자동 견적서 생성기</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧾 나라장터 자동 견적서 생성기</h1>
+            <p>제품번호와 수량을 입력하면 자동으로 견적서를 생성합니다</p>
+            <div class="header-info">
+                <span class="badge">공공데이터 API 연동</span>
+                <span class="badge">실시간 가격 조회</span>
+                <span class="badge">엑셀 다운로드</span>
+            </div>
+        </header>
+
+        <main>
+            <!-- 고객 정보 입력 섹션 -->
+            <div class="input-section">
+                <h2>📋 견적서 정보</h2>
+                <div class="customer-info">
+                    <div class="info-row">
+                        <label for="customer-name">고객명</label>
+                        <input type="text" id="customer-name" placeholder="예: 약사고등학교" value="">
+                        <label for="project-name">건명</label>
+                        <input type="text" id="project-name" placeholder="예: 과학실 실습대 외" value="">
+                    </div>
+                    <div class="checkbox-row">
+                        <label>
+                            <input type="checkbox" id="include-fee" checked> 조달수수료 포함 (0.54%)
+                        </label>
+                        <label>
+                            <input type="checkbox" id="include-vat" checked> 부가세 포함
+                        </label>
+                        <label>
+                            <input type="checkbox" id="include-install" checked> 설치비 포함
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 제품 입력 섹션 -->
+            <div class="input-section">
+                <h2>📝 제품 정보 입력</h2>
+                <div class="section-description">
+                    나라장터 종합쇼핑몰의 제품번호를 입력하세요<br>
+                    <small style="color: #666;">💡 엑셀에서 제품번호와 수량을 복사하여 붙여넣기 할 수 있습니다 (탭으로 구분)</small>
+                </div>
+
+                <div id="product-inputs">
+                    <div class="product-row" data-row="1">
+                        <span class="row-number">1</span>
+                        <input type="text" class="product-no" placeholder="제품번호 (예: 24234567)" maxlength="20">
+                        <input type="number" class="quantity" placeholder="수량" min="1" value="1">
+                        <button onclick="removeRow(this)" class="btn-remove" title="삭제">✕</button>
+                    </div>
+                </div>
+
+                <button onclick="addRow()" class="btn-add">+ 제품 추가</button>
+            </div>
+
+            <!-- 액션 버튼 섹션 -->
+            <div class="action-section">
+                <button onclick="testAPI()" class="btn-test">🔍 API 연결 테스트</button>
+                <button onclick="generateEstimate()" class="btn-generate">📊 견적서 생성 및 다운로드</button>
+            </div>
+
+            <!-- 결과 표시 섹션 -->
+            <div id="result" class="result-section" style="display: none;">
+                <h3>실행 결과</h3>
+                <div id="result-content"></div>
+            </div>
+
+            <!-- 사용 가이드 -->
+            <div class="guide-section">
+                <h3>💡 사용 가이드</h3>
+                <ol>
+                    <li><strong>제품번호 입력:</strong> 나라장터 종합쇼핑몰에서 조회한 제품번호를 입력하세요</li>
+                    <li><strong>수량 설정:</strong> 각 제품의 구매 수량을 입력하세요</li>
+                    <li><strong>제품 추가:</strong> 여러 제품을 한 번에 견적받으려면 '+ 제품 추가' 버튼을 클릭하세요</li>
+                    <li><strong>견적서 생성:</strong> 모든 제품 정보를 입력한 후 '견적서 생성' 버튼을 클릭하세요</li>
+                    <li><strong>엑셀 다운로드:</strong> 견적서가 자동으로 엑셀 파일로 다운로드됩니다</li>
+                </ol>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by 공공데이터 포털 API | 나라장터 종합쇼핑몰</p>
+            <p class="footer-note">※ 실시간 데이터를 기반으로 하며, 실제 가격과 차이가 있을 수 있습니다</p>
+        </footer>
+    </div>
+
+    <!-- 로딩 스피너 -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="spinner"></div>
+        <p>견적서를 생성하는 중입니다...</p>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
