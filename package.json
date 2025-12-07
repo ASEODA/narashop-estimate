@@ -8,6 +8,7 @@
     "dev": "node api/products.js"
   },
   "dependencies": {
+    "@upstash/redis": "^1.35.7",
     "axios": "^1.13.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

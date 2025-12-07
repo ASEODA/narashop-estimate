@@ -3,10 +3,9 @@ const axios = require('axios');
 const ExcelJS = require('exceljs');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs').promises;
-const fsSync = require('fs'); // For sync operations logic (history init)
 const sharp = require('sharp');
 const cookieParser = require('cookie-parser');
+const { Redis } = require('@upstash/redis');
 
 const app = express();
 app.use(cors());
@@ -16,12 +15,13 @@ app.use(cookieParser());
 // --- Auth Config ---
 const USERS = { 'munsuok': 'sonjehong' };
 const AUTH_COOKIE = 'auth_token';
-const DATA_DIR = path.join(__dirname, '../data');
-const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 
-// Ensure Data Dir
-if (!fsSync.existsSync(DATA_DIR)) fsSync.mkdirSync(DATA_DIR);
-if (!fsSync.existsSync(HISTORY_FILE)) fsSync.writeFileSync(HISTORY_FILE, JSON.stringify([]));
+// --- Upstash Redis ---
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
+});
+const HISTORY_KEY = 'estimate_history';
 
 // Middleware
 const checkAuth = (req, res, next) => {
@@ -63,9 +63,10 @@ app.post('/api/logout', (req, res) => {
 // History API
 app.get('/api/history', checkAuth, async (req, res) => {
   try {
-    const data = await fs.readFile(HISTORY_FILE, 'utf8');
-    res.json(JSON.parse(data));
+    const data = await redis.get(HISTORY_KEY);
+    res.json(data || []);
   } catch (e) {
+    console.error('Redis read error:', e);
     res.json([]);
   }
 });
@@ -509,23 +510,22 @@ app.post('/api/generate-estimate', checkAuth, async (req, res) => {
     const dateStr = `${year}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`;
     const filename = `${safeCustomerName}_${safeProjectName}_${dateStr}.xlsx`;
 
-    // Append to history
+    // Append to history (Upstash Redis)
     const historyItem = {
       date: new Date().toISOString(),
       customerName: info.customerName,
       projectName: info.projectName,
       totalAmount: predictedGrandTotal,
       productCount: products.length,
-      // Store full data for restoration
       customerInfo: req.body.customerInfo,
       products: req.body.products
     };
     try {
-      const historyData = JSON.parse(await fs.readFile(HISTORY_FILE, 'utf8'));
-      historyData.unshift(historyItem); // Add to top
-      if (historyData.length > 30) historyData.pop(); // Limit 30
-      await fs.writeFile(HISTORY_FILE, JSON.stringify(historyData, null, 2));
-    } catch (e) { console.error('Error saving history:', e); }
+      const historyData = (await redis.get(HISTORY_KEY)) || [];
+      historyData.unshift(historyItem);
+      if (historyData.length > 30) historyData.pop();
+      await redis.set(HISTORY_KEY, historyData);
+    } catch (e) { console.error('Redis save error:', e); }
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
