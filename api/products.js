@@ -316,7 +316,7 @@ app.post('/api/generate-estimate', checkAuth, async (req, res) => {
 
     worksheet.mergeCells(`${getColLetter(6)}${currentRow}:${getColLetter(10)}${currentRow}`);
     const bizNoCell = worksheet.getCell(currentRow, 6);
-    bizNoCell.value = `등록번호 : ${info.companyBizNo}`;
+    bizNoCell.value = `사업자등록번호 : ${info.companyBizNo}`;
     bizNoCell.font = styles.bodyFont;
     bizNoCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
     currentRow++;
@@ -344,13 +344,6 @@ app.post('/api/generate-estimate', checkAuth, async (req, res) => {
     addrCell.value = `주  소 : ${info.companyAddress}`;
     addrCell.font = styles.bodyFont;
     addrCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
-    currentRow++;
-
-    worksheet.mergeCells(`${getColLetter(6)}${currentRow}:${getColLetter(10)}${currentRow}`);
-    const condCell = worksheet.getCell(currentRow, 6);
-    condCell.value = `업  태 : 도매 / 종  목 : 방송음향기기 및 통신기기`;
-    condCell.font = styles.bodyFont;
-    condCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
     currentRow++;
 
     worksheet.mergeCells(`${getColLetter(6)}${currentRow}:${getColLetter(10)}${currentRow}`);
