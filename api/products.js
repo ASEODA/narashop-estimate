@@ -4,22 +4,97 @@ const ExcelJS = require('exceljs');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs'); // For sync operations logic (history init)
 const sharp = require('sharp');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(cookieParser());
+
+// --- Auth Config ---
+const USERS = { 'munsuok': 'sonjehong' };
+const AUTH_COOKIE = 'auth_token';
+const DATA_DIR = path.join(__dirname, '../data');
+const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+
+// Ensure Data Dir
+if (!fsSync.existsSync(DATA_DIR)) fsSync.mkdirSync(DATA_DIR);
+if (!fsSync.existsSync(HISTORY_FILE)) fsSync.writeFileSync(HISTORY_FILE, JSON.stringify([]));
+
+// Middleware
+const checkAuth = (req, res, next) => {
+  if (req.cookies[AUTH_COOKIE] === 'valid_session') {
+    next();
+  } else {
+    // If API request, 401. If Page request, redirect? 
+    // We treat static files differently.
+    if (req.path.startsWith('/api/')) {
+      res.status(401).json({ error: 'Unauthorized' });
+    } else {
+      res.redirect('/login.html');
+    }
+  }
+};
 
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY || 'c3841318b681fad81247356e55fe8f4d050ed6b2e07377c70d255d4b0f7fd8ac';
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public', 'index.html'));
+// --- Routes ---
+
+// Login API
+app.post('/api/login', (req, res) => {
+  const { id, password } = req.body;
+  if (USERS[id] && USERS[id] === password) {
+    res.cookie(AUTH_COOKIE, 'valid_session', { httpOnly: true });
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: '아이디 또는 비밀번호가 잘못되었습니다.' });
+  }
 });
 
+// Logout API
+app.post('/api/logout', (req, res) => {
+  res.clearCookie(AUTH_COOKIE);
+  res.json({ success: true });
+});
+
+// History API
+app.get('/api/history', checkAuth, async (req, res) => {
+  try {
+    const data = await fs.readFile(HISTORY_FILE, 'utf8');
+    res.json(JSON.parse(data));
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+// Static Files Protection
+// Serve login.html publicly
+app.get('/login.html', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public', 'login.html'));
+});
+
+// Helper for static
+app.use(express.static('public', { index: false })); // Disable auto-index
+
+// Root Route (Protected)
+app.get('/', (req, res) => {
+  if (req.cookies[AUTH_COOKIE] === 'valid_session') {
+    res.sendFile(path.join(__dirname, '../public', 'index.html'));
+  } else {
+    res.redirect('/login.html');
+  }
+});
+
+// Protect other HTMLs if any (using middleware for specific paths if needed, or rely on static generic)
+// For simplicity, let's assume static middleware handles assets, but we intercept index.html requests if not authed.
+// Actually `express.static` with `index: false` won't serve index.html automatically.
+// And we have the specific route for `/`.
+
 // 품목 정보 조회
-app.get('/api/product', async (req, res) => {
+app.get('/api/product', checkAuth, async (req, res) => {
   try {
     const { productNo } = req.query;
     if (!productNo) return res.status(400).json({ error: '제품번호를 입력해주세요.' });
@@ -80,7 +155,7 @@ async function downloadImage(url, productNo) {
 }
 
 // Main: Generate Estimate
-app.post('/api/generate-estimate', async (req, res) => {
+app.post('/api/generate-estimate', checkAuth, async (req, res) => {
   try {
     const { products, customerInfo } = req.body;
     if (!products || products.length === 0) return res.status(400).json({ error: '제품 정보를 입력해주세요.' });
@@ -94,7 +169,6 @@ app.post('/api/generate-estimate', async (req, res) => {
       companyRep: customerInfo?.companyRep || '최 영 혜',
       companyFax: customerInfo?.companyFax || '052.271.6037',
       companyBizNo: customerInfo?.companyBizNo || '166-88-02397',
-      // Logic reinstated: Fee is added to total.
       includeFee: true
     };
 
@@ -150,15 +224,15 @@ app.post('/api/generate-estimate', async (req, res) => {
 
     // --- Vibrant/Cool Style Colors (Phase 5) ---
     const COLORS = {
-      primaryBlue: 'FF3182F6', // Bright Blue
-      deepNavy: 'FF003366',    // Deep Navy (Gradient Start) -> Replaced deepBlue
-      textDark: 'FF1A1F27',    // Darker Text
+      primaryBlue: 'FF3182F6',
+      deepNavy: 'FF003366',
+      textDark: 'FF1A1F27',
       textLight: 'FF8B95A1',
       bgLightBlue: 'FFE8F3FF',
       bgCardOutside: 'FFF2F4F6',
       bgWhite: 'FFFFFFFF',
-      bgZebra: 'FFF0F8FF',     // Light Blue Tint for Zebra (Cooler)
-      borderLight: 'FFCFD8DC', // Crisp
+      bgZebra: 'FFF0F8FF',
+      borderLight: 'FFCFD8DC',
       borderActive: 'FF3182F6'
     };
 
@@ -171,17 +245,8 @@ app.post('/api/generate-estimate', async (req, res) => {
     const worksheet = workbook.addWorksheet(info.projectName || '견적서');
 
     worksheet.columns = [
-      { width: 3 },   // A: Padding Left
-      { width: 6 },   // B: NO
-      { width: 25 },  // C: 품명
-      { width: 18 },  // D: 이미지
-      { width: 35 },  // E: 규격
-      { width: 14 },  // F: 조달번호
-      { width: 8 },   // G: 수량
-      { width: 13 },  // H: 단가
-      { width: 15 },  // I: 금액
-      { width: 15 },  // J: 비고
-      { width: 3 }    // K: Padding Right
+      { width: 3 }, { width: 6 }, { width: 25 }, { width: 18 }, { width: 35 }, { width: 14 },
+      { width: 8 }, { width: 13 }, { width: 15 }, { width: 15 }, { width: 3 }
     ];
 
     worksheet.pageSetup = {
@@ -190,12 +255,9 @@ app.post('/api/generate-estimate', async (req, res) => {
     };
     worksheet.views = [{ showGridLines: false }];
 
-    const SC = 2; // Col B
-    const EC = 10; // Col J
-
+    const SC = 2; const EC = 10;
     const getColLetter = (idx) => ['', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'][idx];
     const contentRange = (row) => `${getColLetter(SC)}${row}:${getColLetter(EC)}${row}`;
-
     let currentRow = 2;
 
     const styles = {
@@ -208,39 +270,28 @@ app.post('/api/generate-estimate', async (req, res) => {
       alignCenter: { horizontal: 'center', vertical: 'middle' },
       alignRight: { horizontal: 'right', vertical: 'middle' },
       alignLeft: { horizontal: 'left', vertical: 'middle', wrapText: true },
-      // Special Alignment for C & E
       alignCenterWrap: { horizontal: 'center', vertical: 'middle', wrapText: true },
-      currencyFmt: '#,##0'
+      currencyFmt: '#,##0',
+      totalRowFill: { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.bgLightBlue } }
     };
 
-    // --- Header with Vibrant Gradient ---
+    // Header
     worksheet.mergeCells(contentRange(currentRow));
     const titleCell = worksheet.getCell(currentRow, SC);
     titleCell.value = '   견    적    서   ';
     titleCell.font = styles.headerFont;
     titleCell.alignment = styles.alignCenter;
-
-    // Gradient Fill (Deep Navy -> Bright Blue)
-    titleCell.fill = {
-      type: 'gradient',
-      gradient: 'linear',
-      degree: 90,
-      stops: [
-        { position: 0, color: { argb: COLORS.deepNavy } },
-        { position: 1, color: { argb: COLORS.primaryBlue } }
-      ]
-    };
+    titleCell.fill = { type: 'gradient', gradient: 'linear', degree: 90, stops: [{ position: 0, color: { argb: COLORS.deepNavy } }, { position: 1, color: { argb: COLORS.primaryBlue } }] };
     worksheet.getRow(currentRow).height = 60;
     currentRow += 2;
 
     // Date
-    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(EC - 2)}${currentRow}`); // B~H
-    const dateLabelCell = worksheet.getCell(currentRow, SC);
-    dateLabelCell.value = '견적일 :';
-    dateLabelCell.font = { name: 'Malgun Gothic', size: 11, bold: true, color: { argb: COLORS.textLight } };
-    dateLabelCell.alignment = { horizontal: 'right', vertical: 'middle' };
+    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(EC - 2)}${currentRow}`);
+    worksheet.getCell(currentRow, SC).value = '견적일 :';
+    worksheet.getCell(currentRow, SC).font = { name: 'Malgun Gothic', size: 11, bold: true, color: { argb: COLORS.textLight } };
+    worksheet.getCell(currentRow, SC).alignment = { horizontal: 'right', vertical: 'middle' };
 
-    worksheet.mergeCells(`${getColLetter(EC - 1)}${currentRow}:${getColLetter(EC)}${currentRow}`); // I~J
+    worksheet.mergeCells(`${getColLetter(EC - 1)}${currentRow}:${getColLetter(EC)}${currentRow}`);
     const dateValueCell = worksheet.getCell(currentRow, EC - 1);
     dateValueCell.value = new Date();
     dateValueCell.numFmt = 'yyyy. mm. dd.';
@@ -248,11 +299,11 @@ app.post('/api/generate-estimate', async (req, res) => {
     dateValueCell.alignment = { horizontal: 'left', vertical: 'middle' };
     currentRow++;
 
-    // Customer Info (Left) - B~E
+    // Customer
     const customerStartRow = currentRow;
-    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(SC + 3)}${currentRow}`); // B~E
+    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(SC + 3)}${currentRow}`);
     worksheet.getCell(currentRow, SC).value = `${info.customerName} 귀하`;
-    worksheet.getCell(currentRow, SC).font = { name: 'Malgun Gothic', size: 18, bold: true, color: { argb: COLORS.deepNavy } }; // Darker Navy Text
+    worksheet.getCell(currentRow, SC).font = { name: 'Malgun Gothic', size: 18, bold: true, color: { argb: COLORS.deepNavy } };
     worksheet.getCell(currentRow, SC).alignment = { horizontal: 'left', vertical: 'bottom' };
 
     worksheet.mergeCells(`${getColLetter(SC)}${currentRow + 1}:${getColLetter(SC + 3)}${currentRow + 1}`);
@@ -260,10 +311,8 @@ app.post('/api/generate-estimate', async (req, res) => {
     worksheet.getCell(currentRow + 1, SC).font = { name: 'Malgun Gothic', size: 12, color: { argb: COLORS.textDark } };
     worksheet.getCell(currentRow + 1, SC).alignment = { horizontal: 'left', vertical: 'top' };
 
-    // Provider Info (Right) - F~J
+    // Provider (Box Fix applied)
     const providerStartRow = currentRow;
-
-    // -- Data Population (No borders yet) --
 
     worksheet.mergeCells(`${getColLetter(6)}${currentRow}:${getColLetter(10)}${currentRow}`);
     const bizNoCell = worksheet.getCell(currentRow, 6);
@@ -290,7 +339,7 @@ app.post('/api/generate-estimate', async (req, res) => {
     worksheet.getCell(currentRow, 10).alignment = styles.alignCenter;
     currentRow++;
 
-    worksheet.mergeCells(`${getColLetter(6)}${currentRow}:${getColLetter(10)}${currentRow}`); // F~J
+    worksheet.mergeCells(`${getColLetter(6)}${currentRow}:${getColLetter(10)}${currentRow}`);
     const addrCell = worksheet.getCell(currentRow, 6);
     addrCell.value = `주  소 : ${info.companyAddress}`;
     addrCell.font = styles.bodyFont;
@@ -312,28 +361,22 @@ app.post('/api/generate-estimate', async (req, res) => {
 
     const providerEndRow = currentRow;
 
-    // -- Apply Box Border (Safe No-Gap Method) --
+    // Box Border Loop
     for (let r = providerStartRow; r <= providerEndRow; r++) {
       for (let c = 6; c <= 10; c++) {
         const cell = worksheet.getCell(r, c);
         if (!cell.border) cell.border = {};
         const b = cell.border;
-        // Left
         if (c === 6) b.left = styles.borderMedium;
-        // Right
         if (c === 10) b.right = styles.borderMedium;
-        // Top
         if (r === providerStartRow) b.top = styles.borderMedium;
-        // Bottom
         if (r === providerEndRow) b.bottom = styles.borderMedium;
-
         cell.border = b;
       }
     }
-
     currentRow += 2;
 
-    // --- Header (Grand Total) --- 
+    // Top Grand Total
     const predictedSum = results.reduce((sum, item) => sum + (item.unitPrice * item.quantity), 0);
     const predictedFee = Math.round(predictedSum * 0.0054);
     const predictedGrandTotal = predictedSum + predictedFee;
@@ -341,19 +384,15 @@ app.post('/api/generate-estimate', async (req, res) => {
 
     worksheet.mergeCells(contentRange(currentRow));
     const totalTextCell = worksheet.getCell(currentRow, SC);
-    // Added "(부가세 포함)"
     totalTextCell.value = `총 결제 금액 : ${koreanAmount} (₩${predictedGrandTotal.toLocaleString()} / 부가세 포함)`;
-    totalTextCell.font = { name: 'Malgun Gothic', size: 16, bold: true, color: { argb: COLORS.deepNavy } }; // Navy text
+    totalTextCell.font = { name: 'Malgun Gothic', size: 16, bold: true, color: { argb: COLORS.deepNavy } };
     totalTextCell.alignment = { horizontal: 'center', vertical: 'middle' };
     totalTextCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.bgWhite } };
-    totalTextCell.border = {
-      top: { style: 'medium', color: { argb: COLORS.deepNavy } },
-      bottom: { style: 'medium', color: { argb: COLORS.deepNavy } }
-    };
+    totalTextCell.border = { top: { style: 'medium', color: { argb: COLORS.deepNavy } }, bottom: { style: 'medium', color: { argb: COLORS.deepNavy } } };
     worksheet.getRow(currentRow).height = 45;
     currentRow += 2;
 
-    // --- Table Header ---
+    // Table
     const headerRow = worksheet.getRow(currentRow);
     const headerLabels = ['NO', '품명(회사명)', '제품사진', '모델명,규격', '조달번호', '수량', '단가', '금액', '비고'];
     let labelIdx = 0;
@@ -361,87 +400,62 @@ app.post('/api/generate-estimate', async (req, res) => {
       const cell = headerRow.getCell(col);
       cell.value = headerLabels[labelIdx++];
       cell.font = styles.tableHeaderFont;
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.deepNavy } }; // Solid Navy Header
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.deepNavy } };
       cell.alignment = styles.alignCenter;
       cell.border = { bottom: { style: 'thin', color: { argb: COLORS.primaryBlue } } };
     }
     headerRow.height = 35;
     currentRow++;
 
-    // --- Data Rows (Zebra Striping: Light Blue) ---
+    // Data
     const startDataRow = currentRow;
     let zebra = false;
     for (const item of results) {
       const dataRow = worksheet.getRow(currentRow);
-
       let productNameText = item.productName;
       if (item.corpName) productNameText = `${item.productName}\n(${item.corpName})`;
 
       dataRow.getCell(2).value = item.no;
       dataRow.getCell(3).value = productNameText;
-      dataRow.getCell(4).value = '';
       dataRow.getCell(5).value = item.spec;
       dataRow.getCell(6).value = item.productNo;
       dataRow.getCell(7).value = item.quantity;
       dataRow.getCell(7).numFmt = '#,##0';
-
       dataRow.getCell(8).value = item.unitPrice;
       dataRow.getCell(8).numFmt = styles.currencyFmt;
-
       dataRow.getCell(9).value = { formula: `G${currentRow}*H${currentRow}`, result: (item.quantity * item.unitPrice) };
       dataRow.getCell(9).numFmt = styles.currencyFmt;
-
       dataRow.getCell(10).value = item.remark;
-
       dataRow.height = 90;
 
-      // Styling & Zebra (Cool Blue)
       const rowFill = zebra ? { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.bgZebra } } : null;
-
       for (let col = SC; col <= EC; col++) {
         const cell = dataRow.getCell(col);
         cell.font = styles.bodyFont;
         if (rowFill) cell.fill = rowFill;
-
         cell.border = { bottom: styles.borderThin };
-
-        // Alignment Logic Fix
-        if (col === 3 || col === 5) { // C (3) & E (5) -> Center Middle Wrap
-          cell.alignment = styles.alignCenterWrap;
-        } else if (col === 8 || col === 9) {
-          cell.alignment = styles.alignRight;
-          cell.font = { ...styles.bodyFont, bold: true };
-        } else cell.alignment = styles.alignCenter;
+        if (col === 3 || col === 5) cell.alignment = styles.alignCenterWrap;
+        else if (col === 8 || col === 9) { cell.alignment = styles.alignRight; cell.font = { ...styles.bodyFont, bold: true }; }
+        else cell.alignment = styles.alignCenter;
       }
-
       zebra = !zebra;
-
       if (item.imageBuffer) {
         try {
           const imageId = workbook.addImage({ buffer: item.imageBuffer, extension: 'png' });
-          worksheet.addImage(imageId, {
-            tl: { col: 3.05, row: currentRow - 0.95 },
-            ext: { width: 120, height: 120 },
-            editAs: 'oneCell'
-          });
+          worksheet.addImage(imageId, { tl: { col: 3.05, row: currentRow - 0.95 }, ext: { width: 120, height: 120 }, editAs: 'oneCell' });
         } catch (e) { }
       }
       currentRow++;
     }
-
     const endDataRow = currentRow - 1;
-
-    // --- Summary Section ---
     currentRow++;
 
-    // Product Total (Sum)
-    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(EC - 2)}${currentRow}`); // B~H
+    // Summary (Bottom)
+    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(EC - 2)}${currentRow}`);
     const sumLabel = worksheet.getCell(currentRow, SC);
     sumLabel.value = '물 품 대 금';
     sumLabel.alignment = styles.alignRight;
     sumLabel.font = { ...styles.subTitleFont, color: { argb: COLORS.textLight } };
-
-    // Value I
     const sumCell = worksheet.getCell(currentRow, EC - 1);
     sumCell.value = { formula: `SUM(I${startDataRow}:I${endDataRow})` };
     sumCell.numFmt = styles.currencyFmt;
@@ -450,14 +464,11 @@ app.post('/api/generate-estimate', async (req, res) => {
     const sumRowIdx = currentRow;
     currentRow++;
 
-    // Fee (0.54%)
-    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(EC - 2)}${currentRow}`); // B~H
+    worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(EC - 2)}${currentRow}`);
     const feeLabel = worksheet.getCell(currentRow, SC);
     feeLabel.value = '조달 수수료 (0.54%)';
     feeLabel.alignment = styles.alignRight;
     feeLabel.font = { ...styles.subTitleFont, color: { argb: COLORS.textLight } };
-
-    // Value I
     const feeCell = worksheet.getCell(currentRow, EC - 1);
     feeCell.value = { formula: `ROUND(I${sumRowIdx}*0.0054, 0)` };
     feeCell.numFmt = styles.currencyFmt;
@@ -466,61 +477,62 @@ app.post('/api/generate-estimate', async (req, res) => {
     const feeRowIdx = currentRow;
     currentRow++;
 
-    // Grand Total
     const totalRow = worksheet.getRow(currentRow);
     worksheet.mergeCells(`${getColLetter(SC)}${currentRow}:${getColLetter(EC - 2)}${currentRow}`);
     totalRow.getCell(SC).value = '총 결제 금액 (대금 + 수수료)';
     totalRow.getCell(SC).alignment = { horizontal: 'right', vertical: 'middle' };
     totalRow.getCell(SC).font = { name: 'Malgun Gothic', size: 12, bold: true, color: { argb: COLORS.deepNavy } };
-
-    // Value: Sum + Fee
     const finalFormula = `I${sumRowIdx}+I${feeRowIdx}`;
     totalRow.getCell(EC - 1).value = { formula: finalFormula };
     totalRow.getCell(EC - 1).numFmt = styles.currencyFmt;
     totalRow.getCell(EC - 1).alignment = styles.alignRight;
     totalRow.getCell(EC - 1).font = { name: 'Malgun Gothic', size: 14, bold: true, color: { argb: COLORS.deepNavy } };
-
-    // Style Row B~J 
     for (let c = SC; c <= EC; c++) {
       const cell = totalRow.getCell(c);
       cell.fill = styles.totalRowFill;
       cell.border = { top: { style: 'thin', color: { argb: COLORS.primaryBlue } }, bottom: { style: 'medium', color: { argb: COLORS.deepNavy } } };
     }
-
     currentRow += 2;
     worksheet.getCell(currentRow, SC).value = '견적 유효기간 : 발행일로부터 1개월';
     worksheet.getCell(currentRow, SC).font = { size: 9, color: { argb: COLORS.textLight } };
+    currentRow += 2;
 
-    currentRow += 2; // Final Padding
-
-    // --- Global Background Logic ---
+    // Global Background
     const lastRow = currentRow;
     const bgFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.bgCardOutside } };
-
-    // Top/Bottom Padding Rows
-    for (let c = 1; c <= 11; c++) {
-      worksheet.getCell(1, c).fill = bgFill;
-      worksheet.getCell(lastRow, c).fill = bgFill;
-    }
-    // Left/Right Padding Cols
+    for (let c = 1; c <= 11; c++) { worksheet.getCell(1, c).fill = bgFill; worksheet.getCell(lastRow, c).fill = bgFill; }
     for (let r = 2; r < lastRow; r++) {
-      worksheet.getCell(r, 1).fill = bgFill;
-      worksheet.getCell(r, 11).fill = bgFill;
-
-      // Inside White
+      worksheet.getCell(r, 1).fill = bgFill; worksheet.getCell(r, 11).fill = bgFill;
       for (let c = SC; c <= EC; c++) {
         const cell = worksheet.getCell(r, c);
-        if (!cell.fill) {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.bgWhite } };
-        }
+        if (!cell.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.bgWhite } };
       }
     }
 
+    // Save Logic (History)
     const excelBuffer = await workbook.xlsx.writeBuffer();
     const safeCustomerName = info.customerName.replace(/[^a-zA-Z0-9가-힣]/g, '');
     const safeProjectName = info.projectName.replace(/[^a-zA-Z0-9가-힣]/g, '');
     const dateStr = `${year}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`;
     const filename = `${safeCustomerName}_${safeProjectName}_${dateStr}.xlsx`;
+
+    // Append to history
+    const historyItem = {
+      date: new Date().toISOString(),
+      customerName: info.customerName,
+      projectName: info.projectName,
+      totalAmount: predictedGrandTotal,
+      productCount: products.length,
+      // Store full data for restoration
+      customerInfo: req.body.customerInfo,
+      products: req.body.products
+    };
+    try {
+      const historyData = JSON.parse(await fs.readFile(HISTORY_FILE, 'utf8'));
+      historyData.unshift(historyItem); // Add to top
+      if (historyData.length > 30) historyData.pop(); // Limit 30
+      await fs.writeFile(HISTORY_FILE, JSON.stringify(historyData, null, 2));
+    } catch (e) { console.error('Error saving history:', e); }
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
@@ -533,15 +545,10 @@ app.post('/api/generate-estimate', async (req, res) => {
   }
 });
 
-// 서버 상태 확인 API
+// Health
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    message: '서버가 정상적으로 실행 중입니다.',
-    apiKeySet: API_KEY !== '여기에_발급받은_인증키를_넣으세요'
-  });
+  res.json({ status: 'OK', message: '서버가 정상적으로 실행 중입니다.' });
 });
 
 app.listen(PORT, () => console.log('Server started on port', PORT));
-
 module.exports = app;

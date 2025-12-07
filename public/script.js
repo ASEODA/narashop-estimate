@@ -1,366 +1,258 @@
-// 전역 변수
-let rowCount = 1;
+document.addEventListener('DOMContentLoaded', () => {
+    fetchHistory();
+    setupEventListeners();
+});
 
-// 제품 행 추가
-function addRow() {
-    const container = document.getElementById('product-inputs');
-    rowCount++;
+// History Logic
+let historyDataCache = []; // Store for restoration
 
-    const newRow = document.createElement('div');
-    newRow.className = 'product-row';
-    newRow.dataset.row = rowCount;
-    newRow.innerHTML = `
-        <span class="row-number">${rowCount}</span>
-        <input type="text" class="product-no" placeholder="제품번호 (예: 24234567)" maxlength="20">
-        <input type="number" class="quantity" placeholder="수량" min="1" value="1">
-        <button onclick="removeRow(this)" class="btn-remove" title="삭제">✕</button>
-    `;
+async function fetchHistory() {
+    const listEl = document.getElementById('historyList');
+    listEl.innerHTML = '<div class="empty-state">내역을 불러오는 중...</div>';
 
-    container.appendChild(newRow);
+    try {
+        const response = await fetch('/api/history');
+        if (response.status === 401) window.location.href = '/login.html';
+        const data = await response.json();
+        historyDataCache = data; // Cache
 
-    // 새로 추가된 입력 필드에 포커스
-    newRow.querySelector('.product-no').focus();
-}
+        if (!data || data.length === 0) {
+            listEl.innerHTML = '<div class="empty-state">최근 발행된 견적서가 없습니다.</div>';
+            return;
+        }
 
-// 제품 행 삭제
-function removeRow(button) {
-    const rows = document.querySelectorAll('.product-row');
-    if (rows.length > 1) {
-        button.parentElement.remove();
-        updateRowNumbers();
-    } else {
-        showMessage('최소 1개의 제품은 입력해야 합니다.', 'warning');
+        listEl.innerHTML = '';
+        data.forEach((item, index) => {
+            const date = new Date(item.date).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            const amount = new Intl.NumberFormat('ko-KR').format(item.totalAmount);
+            const canRestore = item.customerInfo && item.products;
+
+            const div = document.createElement('div');
+            div.className = 'history-item';
+
+            let loadBtnHtml = '';
+            if (canRestore) {
+                div.style.cursor = 'pointer';
+                div.onclick = () => loadEstimate(index);
+                loadBtnHtml = `<div style="font-size:11px; color:#3182F6; margin-top:4px;">불러오기 ></div>`;
+            } else {
+                div.style.cursor = 'default';
+                div.onclick = null;
+                // Optional: Indicate why
+                loadBtnHtml = `<div style="font-size:11px; color:#b0b8c1; margin-top:4px;">불러오기 불가 (이전 내역)</div>`;
+            }
+
+            div.innerHTML = `
+                <div class="h-info">
+                    <div class="h-title">${item.customerName} - ${item.projectName}</div>
+                    <div class="h-date">${date} • ${item.productCount}개 품목</div>
+                </div>
+                <div class="h-amount">
+                    ${amount}원
+                    ${loadBtnHtml}
+                </div>
+            `;
+            listEl.appendChild(div);
+        });
+    } catch (e) {
+        listEl.innerHTML = '<div class="empty-state">내역을 불러오지 못했습니다.</div>';
     }
 }
 
-// 행 번호 업데이트
-function updateRowNumbers() {
+function loadEstimate(index) {
+    const item = historyDataCache[index];
+    if (!item || !item.customerInfo || !item.products) {
+        showToast('이 내역은 상세 정보를 불러올 수 없습니다.');
+        return;
+    }
+
+    // Fill Customer Info
+    const c = item.customerInfo;
+    document.getElementById('customer-name').value = c.customerName || '';
+    document.getElementById('project-name').value = c.projectName || '';
+    // We assume checkboxes are default/persistent or could be stored.
+    // For now, only text fields were stored in recent update.
+    // Wait, I stored full req.body.customerInfo.
+    // Phase 9 implementation: stored full object.
+
+    // Fill Products
+    const container = document.getElementById('product-inputs');
+    container.innerHTML = '';
+    rowCount = 0;
+
+    item.products.forEach(p => {
+        addRow(p.productNo, p.quantity);
+    });
+
+    showToast(`'${item.customerName}' 건의 정보를 불러왔습니다.`);
+
+    // Scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Auth & Global Events
+function setupEventListeners() {
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', async () => {
+            await fetch('/api/logout', { method: 'POST' });
+            window.location.href = '/login.html';
+        });
+    }
+
+    // Excel Copy-Paste Feature
+    document.addEventListener('paste', (e) => {
+        // Only run if specific inputs are not focused (optional, but let's allow general paste if it looks like TSV)
+        // Or if the target is within the product input area.
+        // User said: "In the product info input window..."
+        // Let's attach it to the whole document but check if the pasted data is multiline TSV.
+
+        const clipboardData = e.clipboardData || window.clipboardData;
+        const pastedData = clipboardData.getData('Text');
+
+        if (!pastedData) return;
+
+        // Simple check: multiple lines or tab character?
+        const rows = pastedData.split(/\r\n|\n|\r/).filter(r => r.trim() !== '');
+
+        // If it looks like Excel data (at least 2 cols separated by tab)
+        const isTSV = rows.some(r => r.split('\t').length >= 2);
+
+        if (isTSV) {
+            e.preventDefault();
+
+            // Clear existing rows (User intent usually "replace" or "fill")
+            // But let's ask or just append? 
+            // "Copy from Excel... paste". Usually expects to fill. 
+            // Let's clear for cleaner UX if it's a bulk paste, or maybe just fill from the first empty one?
+            // "feature disappeared" implies it was simple before.
+            // Let's clear and rebuild.
+
+            const container = document.getElementById('product-inputs');
+            container.innerHTML = '';
+            rowCount = 0;
+
+            rows.forEach(rowStr => {
+                const cols = rowStr.split('\t');
+                if (cols.length >= 2) {
+                    const pNo = cols[0].trim();
+                    const qty = cols[1].trim();
+                    if (pNo) {
+                        addRow(pNo, qty);
+                    }
+                }
+            });
+            showToast(`${rows.length}개 품목을 붙여넣었습니다.`);
+        }
+    });
+}
+
+// Product List Logic
+let rowCount = 1;
+
+function addRow(pNoVal = '', qtyVal = '1') {
+    rowCount++;
+    const container = document.getElementById('product-inputs');
+    const div = document.createElement('div');
+    div.className = 'product-row';
+    div.dataset.row = rowCount;
+    div.innerHTML = `
+        <div class="row-idx">${rowCount}</div>
+        <input type="text" class="product-no toss-input" placeholder="조달번호 (8자리)" maxlength="20" value="${pNoVal}">
+        <input type="number" class="quantity toss-input" placeholder="수량" min="1" value="${qtyVal}">
+        <button onclick="removeRow(this)" class="btn-delete" aria-label="삭제">✕</button>
+    `;
+    container.appendChild(div);
+    updateIndexes();
+}
+
+function removeRow(btn) {
+    const row = btn.closest('.product-row');
+    const container = document.getElementById('product-inputs');
+    if (container.children.length > 1) {
+        row.remove();
+        updateIndexes();
+    } else {
+        showToast('최소 1개의 제품이 필요합니다.');
+    }
+}
+
+function updateIndexes() {
     const rows = document.querySelectorAll('.product-row');
     rows.forEach((row, index) => {
-        const numberSpan = row.querySelector('.row-number');
-        if (numberSpan) {
-            numberSpan.textContent = index + 1;
-        }
-        row.dataset.row = index + 1;
+        row.querySelector('.row-idx').textContent = index + 1;
     });
     rowCount = rows.length;
 }
 
-// API 연결 테스트
-async function testAPI() {
-    const resultDiv = document.getElementById('result');
-    const resultContent = document.getElementById('result-content');
-
-    resultDiv.style.display = 'block';
-    resultContent.innerHTML = '<div class="loading">API 연결을 테스트하는 중...</div>';
-
-    try {
-        const response = await fetch('/api/health');
-        const data = await response.json();
-
-        if (data.status === 'OK') {
-            let message = `
-                <div class="success">
-                    ✅ 서버 연결 성공!<br>
-                    상태: ${data.status}<br>
-                    메시지: ${data.message}<br>
-                    API 키 설정: ${data.apiKeySet ? '✅ 완료' : '❌ 필요'}
-                </div>
-            `;
-
-            if (!data.apiKeySet) {
-                message += `
-                    <div class="warning">
-                        ⚠️ API 키가 설정되지 않았습니다.<br>
-                        api/products.js 파일에서 API_KEY를 설정해주세요.
-                    </div>
-                `;
-            }
-
-            resultContent.innerHTML = message;
-        } else {
-            throw new Error('서버 상태 확인 실패');
-        }
-    } catch (error) {
-        console.error('테스트 에러:', error);
-        resultContent.innerHTML = `
-            <div class="error">
-                ❌ API 연결 실패<br>
-                오류: ${error.message}<br>
-                서버가 실행 중인지 확인해주세요.
-            </div>
-        `;
-    }
-}
-
-// 견적서 생성
+// Estimate Generation
 async function generateEstimate() {
-    const resultDiv = document.getElementById('result');
-    const resultContent = document.getElementById('result-content');
-    const loadingOverlay = document.getElementById('loading-overlay');
+    const customerName = document.getElementById('customer-name').value.trim();
+    const projectName = document.getElementById('project-name').value.trim();
 
-    // 고객 정보 수집 (회사 정보는 고정값)
-    const customerInfo = {
-        customerName: document.getElementById('customer-name').value || '고객사',
-        projectName: document.getElementById('project-name').value || '견적 건',
-        companyName: '(주)문 수 시 스 템',
-        companyPhone: '052.276.4200',
-        companyAddress: '울산광역시 중구 운곡길 26',
-        companyRep: '최 영 혜',
-        companyBizNo: '166-88-02397',
-        companyFax: '052.271.6037',
-        includeFee: document.getElementById('include-fee').checked,
-        includeVat: document.getElementById('include-vat').checked,
-        includeInstall: document.getElementById('include-install').checked
-    };
-
-    // 입력값 수집
-    const rows = document.querySelectorAll('.product-row');
+    // Collect Products
+    const productRows = document.querySelectorAll('.product-row');
     const products = [];
-    let hasError = false;
 
-    for (const row of rows) {
-        const productNoInput = row.querySelector('.product-no');
-        const quantityInput = row.querySelector('.quantity');
-        const productNo = productNoInput.value.trim();
-        const quantity = parseInt(quantityInput.value);
-
-        if (productNo && quantity > 0) {
-            products.push({ productNo, quantity });
-        } else if (productNo || quantity) {
-            // 부분적으로만 입력된 경우
-            hasError = true;
-            if (!productNo) {
-                productNoInput.style.borderColor = '#f44336';
-            }
-            if (!quantity || quantity < 1) {
-                quantityInput.style.borderColor = '#f44336';
-            }
-        }
-    }
-
-    // 입력값 검증
-    if (hasError) {
-        showMessage('모든 행에 제품번호와 수량을 올바르게 입력해주세요.', 'error');
-        return;
-    }
+    productRows.forEach(row => {
+        const no = row.querySelector('.product-no').value.trim();
+        const qty = row.querySelector('.quantity').value;
+        if (no) products.push({ productNo: no, quantity: parseInt(qty) || 1 });
+    });
 
     if (products.length === 0) {
-        showMessage('최소 1개 이상의 제품 정보를 입력해주세요.', 'warning');
+        showToast('제품번호를 입력해주세요.');
         return;
     }
 
-    // 로딩 표시
-    loadingOverlay.style.display = 'flex';
-    resultDiv.style.display = 'block';
-    resultContent.innerHTML = '<div class="loading">견적서를 생성하는 중...</div>';
+    const overlay = document.getElementById('loading-overlay');
+    overlay.style.display = 'flex';
 
     try {
+        const payload = {
+            products,
+            customerInfo: {
+                customerName: customerName || '고객사',
+                projectName: projectName || '견적 건'
+            }
+        };
+
         const response = await fetch('/api/generate-estimate', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ products, customerInfo })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
         });
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || '견적서 생성에 실패했습니다.');
+        if (response.status === 401) {
+            window.location.href = '/login.html';
+            return;
         }
 
-        // 엑셀 파일 다운로드
+        if (!response.ok) throw new Error('생성 실패');
+
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
-        a.download = `narashop_estimate_${timestamp}.xlsx`;
+        const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'estimate.xlsx';
+        a.download = decodeURIComponent(filename);
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
 
-        // 성공 메시지
-        resultContent.innerHTML = `
-            <div class="success">
-                ✅ 견적서가 성공적으로 생성되었습니다!<br>
-                총 ${products.length}개 제품의 견적서가 다운로드되었습니다.<br>
-                파일명: narashop_estimate_${timestamp}.xlsx
-            </div>
-        `;
-
-        // 입력 필드 초기화 옵션
-        setTimeout(() => {
-            if (confirm('견적서가 생성되었습니다. 입력 내용을 초기화하시겠습니까?')) {
-                resetForm();
-            }
-        }, 1000);
+        showToast('견적서가 다운로드되었습니다.');
+        fetchHistory(); // Refresh history
 
     } catch (error) {
-        console.error('Error:', error);
-        resultContent.innerHTML = `
-            <div class="error">
-                ❌ 견적서 생성 실패<br>
-                오류: ${error.message}<br>
-                <br>
-                가능한 원인:<br>
-                1. API 키가 올바르게 설정되지 않았습니다.<br>
-                2. 제품번호가 잘못되었습니다.<br>
-                3. 서버가 실행 중이지 않습니다.<br>
-                4. 공공데이터 포털 API 서버에 문제가 있습니다.
-            </div>
-        `;
+        showToast('견적서 생성 중 오류가 발생했습니다.');
     } finally {
-        // 로딩 숨기기
-        loadingOverlay.style.display = 'none';
+        overlay.style.display = 'none';
     }
 }
 
-// 메시지 표시
-function showMessage(message, type = 'info') {
-    const resultDiv = document.getElementById('result');
-    const resultContent = document.getElementById('result-content');
-
-    resultDiv.style.display = 'block';
-    resultContent.innerHTML = `<div class="${type}">${message}</div>`;
-
-    // 5초 후 자동으로 숨기기
-    setTimeout(() => {
-        if (resultContent.innerHTML.includes(message)) {
-            resultDiv.style.display = 'none';
-        }
-    }, 5000);
-}
-
-// 폼 초기화
-function resetForm() {
-    const container = document.getElementById('product-inputs');
-    container.innerHTML = `
-        <div class="product-row" data-row="1">
-            <span class="row-number">1</span>
-            <input type="text" class="product-no" placeholder="제품번호 (예: 24234567)" maxlength="20">
-            <input type="number" class="quantity" placeholder="수량" min="1" value="1">
-            <button onclick="removeRow(this)" class="btn-remove" title="삭제">✕</button>
-        </div>
-    `;
-    rowCount = 1;
-
-    const resultDiv = document.getElementById('result');
-    resultDiv.style.display = 'none';
-}
-
-// Enter 키로 다음 필드로 이동
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        const target = e.target;
-        if (target.classList.contains('product-no')) {
-            const nextInput = target.parentElement.querySelector('.quantity');
-            if (nextInput) {
-                nextInput.focus();
-            }
-        } else if (target.classList.contains('quantity')) {
-            const currentRow = target.parentElement;
-            const nextRow = currentRow.nextElementSibling;
-            if (nextRow) {
-                const nextInput = nextRow.querySelector('.product-no');
-                if (nextInput) {
-                    nextInput.focus();
-                }
-            } else {
-                // 마지막 행에서 Enter를 누르면 새 행 추가
-                addRow();
-            }
-        }
-    }
-});
-
-// 입력 필드 스타일 초기화
-document.addEventListener('input', function(e) {
-    if (e.target.classList.contains('product-no') || e.target.classList.contains('quantity')) {
-        e.target.style.borderColor = '';
-    }
-});
-
-// 엑셀 데이터 붙여넣기 처리
-function handlePaste(e) {
-    e.preventDefault();
-    const pasteData = (e.clipboardData || window.clipboardData).getData('text');
-
-    // 탭으로 구분된 데이터를 파싱
-    const lines = pasteData.trim().split('\n');
-    const container = document.getElementById('product-inputs');
-
-    // 기존 행 제거
-    container.innerHTML = '';
-    rowCount = 0;
-
-    lines.forEach((line, index) => {
-        const [productNo, quantity] = line.split('\t');
-        if (productNo) {
-            rowCount++;
-            const newRow = document.createElement('div');
-            newRow.className = 'product-row';
-            newRow.dataset.row = rowCount;
-            newRow.innerHTML = `
-                <span class="row-number">${rowCount}</span>
-                <input type="text" class="product-no" value="${productNo.trim()}" placeholder="제품번호 (예: 24234567)" maxlength="20">
-                <input type="number" class="quantity" value="${quantity ? quantity.trim() : '1'}" placeholder="수량" min="1">
-                <button onclick="removeRow(this)" class="btn-remove" title="삭제">✕</button>
-            `;
-            container.appendChild(newRow);
-        }
-    });
-
-    showMessage(`${rowCount}개의 제품이 추가되었습니다.`, 'success');
-}
-
-// 페이지 로드 시 초기화
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('나라장터 자동 견적서 생성기가 준비되었습니다!');
-
-    // 첫 입력 필드에 포커스
-    const firstInput = document.querySelector('.product-no');
-    if (firstInput) {
-        firstInput.focus();
-    }
-
-    // 붙여넣기 이벤트 리스너 추가
-    document.getElementById('product-inputs').addEventListener('paste', handlePaste);
-});
-
-// 예제 데이터 자동 입력 (테스트용)
-function loadSampleData() {
-    const sampleProducts = [
-        { productNo: '24234567', quantity: 2 },
-        { productNo: '24234568', quantity: 5 },
-        { productNo: '24234569', quantity: 1 }
-    ];
-
-    // 기존 행 제거 후 샘플 데이터로 채우기
-    const container = document.getElementById('product-inputs');
-    container.innerHTML = '';
-
-    sampleProducts.forEach((product, index) => {
-        const row = document.createElement('div');
-        row.className = 'product-row';
-        row.dataset.row = index + 1;
-        row.innerHTML = `
-            <span class="row-number">${index + 1}</span>
-            <input type="text" class="product-no" value="${product.productNo}" placeholder="제품번호 (예: 24234567)" maxlength="20">
-            <input type="number" class="quantity" value="${product.quantity}" placeholder="수량" min="1">
-            <button onclick="removeRow(this)" class="btn-remove" title="삭제">✕</button>
-        `;
-        container.appendChild(row);
-    });
-
-    rowCount = sampleProducts.length;
-    showMessage('샘플 데이터가 입력되었습니다.', 'success');
-}
-
-// 디버그 모드 (개발용)
-const DEBUG_MODE = false;
-if (DEBUG_MODE) {
-    console.log('디버그 모드 활성화');
-    window.loadSampleData = loadSampleData;
+function showToast(msg) {
+    const el = document.getElementById('result');
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 3000);
 }

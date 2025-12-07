@@ -16,9 +16,19 @@ async function runTest() {
 
     try {
         console.log('Sending request to localhost:3000...');
-        const response = await axios.post('http://localhost:3000/api/generate-estimate', payload, {
+        // Login first to get cookie
+        // Since this is a test script running in node, we need to handle cookies manually or mock it?
+        // Actually, I can just hardcode the cookie header since I know the backend check logic.
+        // Backend checks for 'auth_token=valid_session'.
+
+        const axiosConfig = {
+            headers: {
+                'Cookie': 'auth_token=valid_session'
+            },
             responseType: 'arraybuffer'
-        });
+        };
+
+        const response = await axios.post('http://localhost:3000/api/generate-estimate', payload, axiosConfig);
 
         console.log('Response received. Saving to verify_output.xlsx...');
         fs.writeFileSync('verify_output.xlsx', response.data);
