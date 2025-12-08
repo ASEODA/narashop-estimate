@@ -378,7 +378,7 @@ app.post('/api/generate-estimate', checkAuth, async (req, res) => {
 
     worksheet.mergeCells(contentRange(currentRow));
     const totalTextCell = worksheet.getCell(currentRow, SC);
-    totalTextCell.value = `총 결제 금액 : ${koreanAmount} (₩${predictedGrandTotal.toLocaleString()} / 부가세 포함)`;
+    totalTextCell.value = `총 결제 금액 : ${koreanAmount} (₩${predictedGrandTotal.toLocaleString()} / 부가세 및 설치비 포함)`;
     totalTextCell.font = { name: 'Malgun Gothic', size: 16, bold: true, color: { argb: COLORS.deepNavy } };
     totalTextCell.alignment = { horizontal: 'center', vertical: 'middle' };
     totalTextCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.bgWhite } };
